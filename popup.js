@@ -6,11 +6,13 @@ function loadDates() {
     dueList.innerHTML = "";
     (data.dueDates || []).forEach((item) => {
       const li = document.createElement("li");
-      li.textContent = `${item.title} - ${item.date}`;
+      li.textContent = `${item.title} — ${item.date}`;
       dueList.appendChild(li);
     });
   });
 }
+
+
 
 addBtn.addEventListener("click", () => {
   const title = document.getElementById("title").value.trim();

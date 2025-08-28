@@ -1,13 +1,18 @@
 function scrapeDueDates() {
   let dueItems = [];
 
-  // Look for all <strong> elements
-  const nodes = document.querySelectorAll("strong");
+  // Grab all assignment rows in the table
+  const rows = document.querySelectorAll("tr");
 
-  nodes.forEach(node => {
-    const text = node.innerText;
-    if (text && text.startsWith("Due on")) {
-      dueItems.push(text.trim());
+  rows.forEach(row => {
+    const text = row.innerText;
+    if (text && text.includes("Due on")) {
+      // Example: "Module 01 - Introduction to Systems Development\nDue on Sep 1, 2025 11:59 PM"
+      const parts = text.split("\n");
+      const title = parts[0].trim();
+      const due = parts.find(p => p.startsWith("Due on")).replace("Due on ", "");
+
+      dueItems.push({ title, date: due });
     }
   });
 
@@ -15,10 +20,9 @@ function scrapeDueDates() {
     chrome.storage.sync.get("dueDates", (data) => {
       let existing = data.dueDates || [];
 
-      dueItems.forEach(d => {
-        // Only add if not already saved
-        if (!existing.some(e => e.title === d)) {
-          existing.push({ title: d, date: "auto" });
+      dueItems.forEach(item => {
+        if (!existing.some(e => e.title === item.title && e.date === item.date)) {
+          existing.push(item);
         }
       });
 
