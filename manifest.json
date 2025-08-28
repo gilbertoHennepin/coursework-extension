@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Coursework Due Dates",
+  "version": "1.0",
+  "description": "Add and view your coursework due dates.",
+  "permissions": ["storage"],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}
