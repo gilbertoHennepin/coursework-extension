@@ -1,10 +1,19 @@
 {
   "manifest_version": 3,
   "name": "Coursework Due Dates",
-  "version": "1.0",
-  "description": "Add and view your coursework due dates.",
+  "version": "1.1",
+  "description": "Fetches due dates from D2L and shows them.",
   "permissions": ["storage"],
   "action": {
     "default_popup": "popup.html"
-  }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.brightspace.com/*",
+        "*://*/d2l/*"
+      ],
+      "js": ["content.js"]
+    }
+  ]
 }
