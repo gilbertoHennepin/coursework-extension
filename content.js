@@ -1,12 +1,12 @@
 function scrapeDueDates() {
   let dueItems = [];
 
-  // Example selector: look for any element containing "Due"
-  const allTextNodes = document.querySelectorAll("body *");
+  // Look for all <strong> elements
+  const nodes = document.querySelectorAll("strong");
 
-  allTextNodes.forEach(node => {
+  nodes.forEach(node => {
     const text = node.innerText;
-    if (text && text.match(/Due/i)) {
+    if (text && text.startsWith("Due on")) {
       dueItems.push(text.trim());
     }
   });
@@ -16,7 +16,7 @@ function scrapeDueDates() {
       let existing = data.dueDates || [];
 
       dueItems.forEach(d => {
-        // Avoid duplicates
+        // Only add if not already saved
         if (!existing.some(e => e.title === d)) {
           existing.push({ title: d, date: "auto" });
         }
@@ -27,5 +27,4 @@ function scrapeDueDates() {
   }
 }
 
-// Run when page loads
 window.addEventListener("load", scrapeDueDates);
