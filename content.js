@@ -55,26 +55,42 @@ function extractAssignmentsFromPage() {
     const date = makeSafeDate(dateStr);
     if (!date) continue;
     
-    // Find the assignment title by looking backwards from the due date
-    const start = Math.max(0, match.index - 150);
-    const context = text.substring(start, match.index);
+    // Find the assignment title by looking at the structure around the due date
+    const start = Math.max(0, match.index - 200);
+    const end = Math.min(text.length, match.index + 100);
+    const context = text.substring(start, end);
     
-    // Split into lines and find the most likely assignment title
+    // Look for assignment names - they're usually on previous lines
     const lines = context.split('\n')
       .map(line => line.trim())
       .filter(line => line.length > 2 && 
                      !line.includes('Due on') &&
                      !line.match(/^\d+\s*\/\s*\d+$/) &&
                      !line.match(/[A-Za-z]{3} \d{1,2}, \d{4}/) &&
-                     !line.match(/^[0-9\.\s]+$/));
+                     !line.match(/^[0-9\.\s]+$/) &&
+                     !line.match(/^[A-Za-z]+\s+\d{1,2}/)); // Exclude dates
     
+    // The assignment title is usually the line just before the due date context
     if (lines.length > 0) {
-      let title = lines[lines.length - 1];
+      // Try to find the most likely title (usually the last meaningful line before the date)
+      let title = '';
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (lines[i].length > 3 && !lines[i].match(/score|status|submission|feedback/i)) {
+          title = lines[i];
+          break;
+        }
+      }
+      
+      // If no good title found, use the last line
+      if (!title && lines.length > 0) {
+        title = lines[lines.length - 1];
+      }
       
       // Clean up the title
       title = title.replace(/^\d+\.\s*/, '')
                    .replace(/[-–].*$/, '')
                    .replace(/Due on.*$/, '')
+                   .replace(/\(.*\)/, '')
                    .replace(/\s+/g, ' ')
                    .trim();
       
@@ -86,6 +102,8 @@ function extractAssignmentsFromPage() {
           source: 'D2L'
         });
         debugLog(`Found: "${title}" - ${date}`);
+      } else {
+        debugLog(`Could not extract title for date: ${date}`);
       }
     }
   }
@@ -119,8 +137,12 @@ function saveAssignmentsToStorage(assignments) {
     // Save to storage
     chrome.storage.sync.set({ dueDates: uniqueAssignments }, () => {
       debugLog(`Successfully saved ${assignments.length} assignments`);
-      // Send message to popup to refresh
-      chrome.runtime.sendMessage({action: "refreshDueDates"});
+      // Send message to popup to refresh (with error handling)
+      try {
+        chrome.runtime.sendMessage({action: "refreshDueDates"});
+      } catch (e) {
+        debugLog("Could not send refresh message:", e);
+      }
     });
   });
 }
@@ -134,17 +156,29 @@ function clearOldD2LData() {
   });
 }
 
-// Main execution
-debugLog("Starting assignment extraction");
-clearOldD2LData();
-
-setTimeout(() => {
-  const assignments = extractAssignmentsFromPage();
-  debugLog(`Found ${assignments.length} assignments`);
+// Main execution with error handling
+try {
+  debugLog("Starting assignment extraction");
+  clearOldD2LData();
   
-  if (assignments.length > 0) {
-    saveAssignmentsToStorage(assignments);
-  } else {
-    debugLog("No assignments found. Page content:", document.body.textContent.substring(0, 500));
-  }
-}, 2000);
+  setTimeout(() => {
+    try {
+      const assignments = extractAssignmentsFromPage();
+      debugLog(`Found ${assignments.length} assignments`);
+      
+      if (assignments.length > 0) {
+        saveAssignmentsToStorage(assignments);
+      } else {
+        debugLog("No assignments found. Trying alternative approach...");
+        
+        // Alternative approach: look for specific D2L elements
+        const d2lElements = document.querySelectorAll('[class*="d2l"], tr, li');
+        debugLog(`Found ${d2lElements.length} potential D2L elements`);
+      }
+    } catch (e) {
+      debugLog("Error in assignment extraction:", e);
+    }
+  }, 3000);
+} catch (e) {
+  debugLog("Initialization error:", e);
+}
