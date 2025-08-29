@@ -31,10 +31,11 @@ function loadDates() {
       const li = document.createElement("li");
       li.className = "due";
       
-      const title = item.title.replace(/â€"/g, '-');
+      const title = item.title;
       const date = formatDate(item.date);
+      const score = item.score ? ` (${item.score})` : '';
       
-      li.textContent = `${title} — due ${date}`;
+      li.textContent = `${title}${score} — due ${date}`;
 
       // Add delete button
       const deleteBtn = document.createElement("button");

@@ -155,61 +155,54 @@ function extractTitleFromNode(node) {
 }
 
 function extractAssignmentInfo(node) {
-  // Skip empty nodes
-  if (!node?.innerText) return null;
-
-  const text = node.innerText;
+  const text = node.innerText || '';
   
-  // Skip items without dates
-  if (!text.includes('due') && !text.includes('Due')) return null;
-
-  // Extract title - take first non-empty line that's not a date
-  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-  const title = lines.find(l => !l.match(/due|Due|\d{1,2}\/\d{1,2}\/\d{4}/i)) || '';
-
-  // Extract date with format "Due on Sep 1, 2025 11:59 PM" 
-  const dateMatch = text.match(/Due\s+(?:on\s+)?([A-Za-z]+\s+\d{1,2},\s+\d{4}\s+\d{1,2}:\d{2}\s+(?:AM|PM))/i);
-  
+  // Match "Due on <date>" pattern
+  const dateMatch = text.match(/Due on ([A-Za-z]+ \d{1,2}, \d{4} \d{1,2}:\d{2} [AP]M)/);
   if (!dateMatch) return null;
 
-  try {
-    const date = new Date(dateMatch[1]);
-    if (isNaN(date)) return null;
+  // Get assignment title - first non-empty line that's not a date or score
+  const lines = text.split('\n')
+    .map(l => l.trim())
+    .filter(l => l && !l.includes('Due on') && !l.match(/^\d+\s*\/\s*\d+$/));
+  
+  const title = lines[0];
+  if (!title) return null;
 
-    return {
-      title: title.replace(/â€"/g, '-').trim(), // Clean up em-dashes
-      date: date.toISOString(),
-      type: "due"
-    };
-  } catch(e) {
-    return null;
-  }
+  // Get score if available
+  const scoreMatch = text.match(/(\d+)\s*\/\s*(\d+)/);
+  const score = scoreMatch ? `${scoreMatch[1]}/${scoreMatch[2]}` : null;
+
+  return {
+    title: title.replace(/â€"/g, '-').trim(),
+    date: new Date(dateMatch[1]).toISOString(),
+    type: 'due',
+    score
+  };
 }
 
 function scrapeDueDates() {
   const assignments = [];
   
-  // Look for assignment containers
-  const containers = document.querySelectorAll('tr, li, .d2l-le-assignment, .d2l-item');
+  // Target assignment rows
+  const containers = document.querySelectorAll('tr, .d2l-table-row');
   
   containers.forEach(container => {
     const info = extractAssignmentInfo(container);
-    if (info) {
-      assignments.push(info);
-    }
+    if (info) assignments.push(info);
   });
 
   if (assignments.length) {
     chrome.storage.sync.get("dueDates", (data) => {
       let existing = data.dueDates || [];
       
-      // Add new assignments, avoid duplicates
       assignments.forEach(item => {
-        if (!existing.some(e => 
-          e.title === item.title && 
-          e.date === item.date
-        )) {
-          existing.push(item);
+        // Update or add new assignments
+        const index = existing.findIndex(e => e.title === item.title);
+        if (index >= 0) {
+          existing[index] = item; // Update existing
+        } else {
+          existing.push(item); // Add new
         }
       });
 
