@@ -3,34 +3,53 @@ const addBtn = document.getElementById("add");
 
 function normalizeText(s) {
   if (!s) return "";
-  // fix common mojibake for em-dash and trim
-  return s.replace(/â€”/g, "—").replace(/\uFFFD/g, "—").normalize("NFC").trim();
+  return s.replace(/â€"/g, "—").replace(/\uFFFD/g, "—").normalize("NFC").trim();
 }
 
-function formatDateIso(iso) {
-  try {
-    const d = new Date(iso);
-    if (isNaN(d)) return iso;
-    return d.toLocaleString();
-  } catch (e) { return iso; }
+function formatDate(isoDate) {
+  const date = new Date(isoDate);
+  const options = { 
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  };
+  return date.toLocaleString('en-US', options);
 }
 
 function loadDates() {
   chrome.storage.sync.get("dueDates", (data) => {
-    dueList.innerHTML = "";
-    (data.dueDates || []).forEach((item) => {
+    const list = document.getElementById("due-list");
+    list.innerHTML = "";
+    
+    const dates = data.dueDates || [];
+    dates.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+    dates.forEach(item => {
       const li = document.createElement("li");
-      li.className = item.type === "due" ? "due" : (item.type === "available-until" ? "available" : "");
-      const title = normalizeText(item.title);
-      const prettyDate = formatDateIso(item.date);
-      if (item.type === "due") {
-        li.textContent = `${title} — due ${prettyDate}`;
-      } else if (item.type === "available-until") {
-        li.textContent = `${title} — available until ${prettyDate}`;
-      } else {
-        li.textContent = `${title} — ${prettyDate}`;
-      }
-      dueList.appendChild(li);
+      li.className = "due";
+      
+      const title = item.title.replace(/â€"/g, '-');
+      const date = formatDate(item.date);
+      
+      li.textContent = `${title} — due ${date}`;
+
+      // Add delete button
+      const deleteBtn = document.createElement("button");
+      deleteBtn.className = "delete-btn";
+      deleteBtn.innerHTML = "×";
+      deleteBtn.onclick = () => {
+        const newDates = dates.filter(d => 
+          d.title !== item.title || 
+          d.date !== item.date
+        );
+        chrome.storage.sync.set({ dueDates: newDates }, loadDates);
+      };
+
+      li.appendChild(deleteBtn);
+      list.appendChild(li);
     });
   });
 }
@@ -39,16 +58,17 @@ addBtn.addEventListener("click", () => {
   const title = document.getElementById("title").value.trim();
   const date = document.getElementById("date").value;
   if (!title || !date) return;
-  // by default user-added items are 'due'
+  
   chrome.storage.sync.get("dueDates", (data) => {
     const newList = data.dueDates || [];
-    // convert date input (YYYY-MM-DD) to ISO
     const iso = new Date(date).toISOString();
     newList.push({ title, date: iso, type: "due" });
     chrome.storage.sync.set({ dueDates: newList }, loadDates);
   });
+  
   document.getElementById("title").value = "";
   document.getElementById("date").value = "";
 });
 
-loadDates();
+// Initialize
+document.addEventListener('DOMContentLoaded', loadDates);

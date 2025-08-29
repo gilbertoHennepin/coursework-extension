@@ -154,72 +154,69 @@ function extractTitleFromNode(node) {
   }
 }
 
-function scrapeDueDates() {
-  debugLog("scrapeDueDates start");
-  const seen = new Set();
-  const dueItems = [];
-  const candidates = collectCandidates(document);
-  debugLog("candidates length", candidates.length);
-  if (candidates.length === 0) candidates.push(document.body);
+function extractAssignmentInfo(node) {
+  // Skip empty nodes
+  if (!node?.innerText) return null;
 
-  candidates.forEach(node => {
-    const txt = node.innerText || "";
-    if (!txt) return;
-    if (!/Due\b/i.test(txt) && !/Available until\b/i.test(txt) && !/(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\b/i.test(txt)) return;
+  const text = node.innerText;
+  
+  // Skip items without dates
+  if (!text.includes('due') && !text.includes('Due')) return null;
 
-    // improved title extraction
-    const title = extractTitleFromNode(node);
-    const dateObj = findDateInNode(node);
-    if (!title || !dateObj) return;
+  // Extract title - take first non-empty line that's not a date
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  const title = lines.find(l => !l.match(/due|Due|\d{1,2}\/\d{1,2}\/\d{4}/i)) || '';
 
-    const key = `${title}||${dateObj.dateISO}||${dateObj.type}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    dueItems.push({ title: title, date: dateObj.dateISO, type: dateObj.type });
-  });
+  // Extract date with format "Due on Sep 1, 2025 11:59 PM" 
+  const dateMatch = text.match(/Due\s+(?:on\s+)?([A-Za-z]+\s+\d{1,2},\s+\d{4}\s+\d{1,2}:\d{2}\s+(?:AM|PM))/i);
+  
+  if (!dateMatch) return null;
 
-  debugLog("found dueItems", dueItems);
-  if (dueItems.length > 0) {
-    chrome.storage.sync.get("dueDates", (data) => {
-      let existing = data.dueDates || [];
+  try {
+    const date = new Date(dateMatch[1]);
+    if (isNaN(date)) return null;
 
-      dueItems.forEach(item => {
-        // if same title and same date+type exists, skip
-        if (existing.some(e => e.title === item.title && e.date === item.date && e.type === item.type)) return;
-
-        // prefer 'due' over existing 'available-until' for the same title:
-        if (item.type === "due") {
-          // remove any available-until entries for this title (even if different date)
-          existing = existing.filter(e => !(e.title === item.title && e.type === "available-until"));
-          existing.push(item);
-          return;
-        }
-
-        // if adding available-until, don't overwrite an existing 'due' for same title
-        if (item.type === "available-until") {
-          if (existing.some(e => e.title === item.title && e.type === "due")) return;
-          existing.push(item);
-          return;
-        }
-
-        // default push for unknown type
-        existing.push(item);
-      });
-
-      chrome.storage.sync.set({ dueDates: existing }, () => debugLog("Saved dueDates:", existing));
-    });
+    return {
+      title: title.replace(/â€"/g, '-').trim(), // Clean up em-dashes
+      date: date.toISOString(),
+      type: "due"
+    };
+  } catch(e) {
+    return null;
   }
 }
 
-function startScraper() {
-  debugLog("startScraper");
-  scrapeDueDates();
-  const observer = new MutationObserver(() => {
-    if (observer._timeout) clearTimeout(observer._timeout);
-    observer._timeout = setTimeout(scrapeDueDates, 300);
+function scrapeDueDates() {
+  const assignments = [];
+  
+  // Look for assignment containers
+  const containers = document.querySelectorAll('tr, li, .d2l-le-assignment, .d2l-item');
+  
+  containers.forEach(container => {
+    const info = extractAssignmentInfo(container);
+    if (info) {
+      assignments.push(info);
+    }
   });
-  observer.observe(document, { childList: true, subtree: true });
-}
 
-if (document.readyState === "complete" || document.readyState === "interactive") startScraper();
-else window.addEventListener("DOMContentLoaded", startScraper, { once: true });
+  if (assignments.length) {
+    chrome.storage.sync.get("dueDates", (data) => {
+      let existing = data.dueDates || [];
+      
+      // Add new assignments, avoid duplicates
+      assignments.forEach(item => {
+        if (!existing.some(e => 
+          e.title === item.title && 
+          e.date === item.date
+        )) {
+          existing.push(item);
+        }
+      });
+
+      // Sort by date
+      existing.sort((a, b) => new Date(a.date) - new Date(b.date));
+      
+      chrome.storage.sync.set({ dueDates: existing });
+    });
+  }
+}
