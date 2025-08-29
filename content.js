@@ -8,8 +8,8 @@ function isD2LPage() {
   return location.hostname.includes('d2l') || 
          location.hostname.includes('brightspace') ||
          document.querySelector('[class*="d2l"]') ||
-         document.title.includes('D2L') ||
-         document.title.includes('Brightspace');
+         document.title.includes('Assignment') ||
+         document.querySelector('a[href*="assignments"]');
 }
 
 if (!isD2LPage()) {
@@ -35,7 +35,6 @@ function makeSafeDate(dateStr) {
     const minutes = parseInt(match[5], 10);
     const isPM = match[6].toUpperCase() === 'PM';
     
-    // Convert to 24-hour format
     if (isPM && hours < 12) hours += 12;
     if (!isPM && hours === 12) hours = 0;
     
@@ -46,173 +45,79 @@ function makeSafeDate(dateStr) {
   return null;
 }
 
-function extractD2LAssignments() {
+function scrapeAllDueDates() {
+  debugLog("Scanning entire page for due dates...");
   const assignments = [];
+  const text = document.body.textContent;
   
-  debugLog("Looking for assignments in page content...");
+  // Find all due date patterns in the entire page
+  const dueDateRegex = /Due on ([A-Za-z]+ \d{1,2}, \d{4} \d{1,2}:\d{2} [AP]M)/gi;
+  let match;
   
-  // Method 1: Look for table rows with due dates
-  const rows = document.querySelectorAll('tr, .d2l-list-item, [role="row"], .d2l-table-row');
-  
-  rows.forEach((row) => {
-    const text = row.textContent || '';
-    
-    // Skip rows that don't contain due date patterns
-    if (!text.match(/Due on|Due:|until|submission|assignment/i)) return;
-    if (!text.match(/[A-Za-z]{3} \d{1,2}, \d{4}/)) return;
-    
-    // Extract due date
-    const dueMatch = text.match(/(Due on|Due:)\s*([A-Za-z]+ \d{1,2}, \d{4} \d{1,2}:\d{2} [AP]M)/i);
-    const dateStr = dueMatch ? dueMatch[2] : text.match(/[A-Za-z]+ \d{1,2}, \d{4} \d{1,2}:\d{2} [AP]M/)?.[0];
-    
-    if (!dateStr) return;
-    
+  while ((match = dueDateRegex.exec(text)) !== null) {
+    const dateStr = match[1];
     const date = makeSafeDate(dateStr);
-    if (!date) return;
+    if (!date) continue;
     
-    // Extract assignment title - look for the most prominent text
-    let title = '';
+    // Find the assignment title - look backwards from the due date
+    const start = Math.max(0, match.index - 200);
+    const context = text.substring(start, match.index);
+    const lines = context.split('\n').filter(line => line.trim().length > 3);
     
-    // Try to find text that looks like an assignment name
-    const possibleTitles = text.split('\n')
-      .map(line => line.trim())
-      .filter(line => line.length > 3 && 
-                     !line.includes('Due on') &&
-                     !line.includes('Due:') &&
-                     !line.match(/^\d+\s*\/\s*\d+$/) &&
-                     !line.match(/^\d+\.$/) &&
-                     !line.match(/[A-Za-z]{3} \d{1,2}, \d{4}/));
+    let title = lines[lines.length - 1] || 'Unknown Assignment';
+    title = title.trim()
+                .replace(/^\d+\.\s*/, '')
+                .replace(/[-–].*$/, '')
+                .replace(/Due on.*$/, '')
+                .replace(/\s+/g, ' ')
+                .trim();
     
-    if (possibleTitles.length > 0) {
-      title = possibleTitles[0];
-    } else {
-      // Look for links or bold text
-      const link = row.querySelector('a, [class*="title"], [class*="name"], strong, b');
-      if (link && link.textContent) {
-        title = link.textContent.trim();
-      }
-    }
-    
-    // Clean up title
-    title = title.replace(/^\d+\.\s*/, '')
-                 .replace(/â€"/g, '-')
-                 .replace(/Due on.*$/, '')
-                 .replace(/[-–].*$/, '')
-                 .trim();
-    
-    if (!title || title.length < 3) return;
-    
-    assignments.push({
-      title: title,
-      date: date.toISOString(),
-      type: 'due',
-      source: 'D2L'
-    });
-    
-    debugLog(`Found assignment: "${title}" - ${date}`);
-  });
-  
-  // Method 2: Look for any text content with due dates
-  if (assignments.length === 0) {
-    debugLog("Trying alternative scraping method...");
-    
-    const textContent = document.body.textContent || '';
-    const dueDateMatches = textContent.matchAll(/Due on ([A-Za-z]+ \d{1,2}, \d{4} \d{1,2}:\d{2} [AP]M)/gi);
-    
-    for (const match of dueDateMatches) {
-      const dateStr = match[1];
-      const date = makeSafeDate(dateStr);
-      if (!date) continue;
-      
-      // Try to find the assignment title near the due date
-      const context = textContent.substring(Math.max(0, match.index - 200), match.index + 50);
-      const lines = context.split('\n').filter(line => line.trim().length > 3);
-      
-      let title = lines[lines.length - 1] || '';
-      title = title.replace(/^\d+\.\s*/, '')
-                   .replace(/â€"/g, '-')
-                   .replace(/Due on.*$/, '')
-                   .trim();
-      
-      if (title && title.length > 3) {
-        assignments.push({
-          title: title,
-          date: date.toISOString(),
-          type: 'due',
-          source: 'D2L'
-        });
-        debugLog(`Found assignment via text scan: "${title}" - ${date}`);
-      }
+    if (title.length > 2) {
+      assignments.push({
+        title: title,
+        date: date.toISOString(),
+        type: 'due',
+        source: 'D2L'
+      });
+      debugLog(`Found: "${title}" - ${date}`);
     }
   }
   
   return assignments;
 }
 
-function scrapeDueDates() {
-  debugLog("Starting D2L due date scraping...");
-  
-  const assignments = extractD2LAssignments();
-  debugLog(`Found ${assignments.length} assignments total`);
-  
-  if (assignments.length > 0) {
-    chrome.storage.sync.get("dueDates", (data) => {
-      let existing = data.dueDates || [];
-      
-      // Filter out non-D2L entries
-      const d2lOnly = existing.filter(item => item.source === 'D2L');
-      
-      // Add new D2L assignments
-      assignments.forEach(newItem => {
-        const exists = d2lOnly.some(existingItem => 
-          existingItem.title === newItem.title && existingItem.date === newItem.date
-        );
-        
-        if (!exists) {
-          d2lOnly.push(newItem);
-        }
-      });
-      
-      // Sort by date
-      d2lOnly.sort((a, b) => new Date(a.date) - new Date(b.date));
-      
-      // Store back
-      chrome.storage.sync.set({ dueDates: d2lOnly }, () => {
-        debugLog("D2L due dates saved to storage:", d2lOnly.length, "items");
-        // Send message to popup to refresh
-        chrome.runtime.sendMessage({action: "refreshDueDates"});
-      });
-    });
-  } else {
-    debugLog("No D2L assignments found on this page");
-    // Check if we're on an assignments page
-    const pageTitle = document.title;
-    const pageContent = document.body.textContent || '';
-    if (pageContent.includes('Assignment') || pageContent.includes('Due on')) {
-      debugLog("Page appears to have assignments but none were found. Page structure may be different.");
-      debugLog("Page title:", pageTitle);
-    }
+function saveAssignments(assignments) {
+  if (assignments.length === 0) {
+    debugLog("No assignments found");
+    return;
   }
+  
+  chrome.storage.sync.get("dueDates", (data) => {
+    let existing = data.dueDates || [];
+    
+    // Clear old D2L entries and add new ones
+    const nonD2L = existing.filter(item => item.source !== 'D2L');
+    const updated = [...nonD2L, ...assignments];
+    
+    // Remove duplicates
+    const unique = updated.filter((item, index, self) =>
+      index === self.findIndex(t => t.title === item.title && t.date === item.date)
+    );
+    
+    // Sort by date
+    unique.sort((a, b) => new Date(a.date) - new Date(b.date));
+    
+    chrome.storage.sync.set({ dueDates: unique }, () => {
+      debugLog(`Saved ${assignments.length} D2L assignments`);
+      chrome.runtime.sendMessage({action: "refreshDueDates"});
+    });
+  });
 }
 
-// Run when page loads and also listen for SPA navigation
+// Main execution
 if (isD2LPage()) {
-  // Initial scrape with delay
-  setTimeout(scrapeDueDates, 5000);
-  
-  // Also try when user interacts with page (for SPAs)
-  document.addEventListener('click', () => {
-    setTimeout(scrapeDueDates, 2000);
-  }, { once: true });
-  
-  // Observe DOM changes for dynamically loaded content
-  const observer = new MutationObserver(() => {
-    setTimeout(scrapeDueDates, 1000);
-  });
-  
-  observer.observe(document.body, { 
-    childList: true, 
-    subtree: true,
-    characterData: true 
-  });
+  setTimeout(() => {
+    const assignments = scrapeAllDueDates();
+    saveAssignments(assignments);
+  }, 3000);
 }
