@@ -161,54 +161,40 @@ function extractAssignmentInfo(node) {
   const dateMatch = text.match(/Due on ([A-Za-z]+ \d{1,2}, \d{4} \d{1,2}:\d{2} [AP]M)/);
   if (!dateMatch) return null;
 
-  // Get assignment title - first non-empty line that's not a date or score
+  // Get title without numbered prefixes and clean up special characters
   const lines = text.split('\n')
     .map(l => l.trim())
-    .filter(l => l && !l.includes('Due on') && !l.match(/^\d+\s*\/\s*\d+$/));
+    .filter(l => l && !l.includes('Due on') && !l.match(/^\d+\s*\/\s*\d+$/))
+    .map(l => l.replace(/^\d+\.\s*/, '')) // Remove numbered prefixes like "1."
+    .map(l => l.replace(/â€"/g, '-')); // Clean up em-dashes
   
   const title = lines[0];
   if (!title) return null;
 
-  // Get score if available
-  const scoreMatch = text.match(/(\d+)\s*\/\s*(\d+)/);
-  const score = scoreMatch ? `${scoreMatch[1]}/${scoreMatch[2]}` : null;
-
   return {
-    title: title.replace(/â€"/g, '-').trim(),
+    title,
     date: new Date(dateMatch[1]).toISOString(),
-    type: 'due',
-    score
+    type: 'due'
   };
 }
 
 function scrapeDueDates() {
   const assignments = [];
-  
-  // Target assignment rows
-  const containers = document.querySelectorAll('tr, .d2l-table-row');
-  
-  containers.forEach(container => {
-    const info = extractAssignmentInfo(container);
+  document.querySelectorAll('tr, .d2l-table-row').forEach(row => {
+    const info = extractAssignmentInfo(row);
     if (info) assignments.push(info);
   });
 
   if (assignments.length) {
     chrome.storage.sync.get("dueDates", (data) => {
       let existing = data.dueDates || [];
-      
       assignments.forEach(item => {
-        // Update or add new assignments
-        const index = existing.findIndex(e => e.title === item.title);
-        if (index >= 0) {
-          existing[index] = item; // Update existing
-        } else {
-          existing.push(item); // Add new
+        // Only add if not already present
+        if (!existing.some(e => e.title === item.title && e.date === item.date)) {
+          existing.push(item);
         }
       });
-
-      // Sort by date
       existing.sort((a, b) => new Date(a.date) - new Date(b.date));
-      
       chrome.storage.sync.set({ dueDates: existing });
     });
   }
