@@ -10,21 +10,15 @@ function monthNameToNum(m) {
 
 function makeSafeDate(str) {
   if (!str) return null;
-  // try direct parse
   let d = new Date(str);
   if (!isNaN(d)) return d;
-  // add current year if missing
   const now = new Date();
   const year = now.getFullYear();
-  const withYear = `${str} ${year}`;
-  d = new Date(withYear);
+  d = new Date(`${str} ${year}`);
   if (!isNaN(d)) {
-    // if result is far in the past assume next year
-    const daysDiff = (now - d) / (1000*60*60*24);
-    if (daysDiff > 120) d.setFullYear(year + 1);
+    if ((now - d) / (1000*60*60*24) > 120) d.setFullYear(year + 1);
     return d;
   }
-  // try parsing formats like "Aug 25" or "Sep 1"
   const m = str.match(/([A-Za-z]{3,9})\s*(\d{1,2})/);
   if (m) {
     const mn = monthNameToNum(m[1]);
@@ -35,73 +29,73 @@ function makeSafeDate(str) {
       return d;
     }
   }
+  // ISO fallback
+  const iso = str.match(/\d{4}-\d{2}-\d{2}/);
+  if (iso) {
+    const dd = new Date(iso[0]);
+    if (!isNaN(dd)) return dd;
+  }
   return null;
 }
 
-// improved extractDate: handles "Due ...", ranges like "Aug 25 - Sep 1", and yearless dates
-function extractDate(text) {
+// new: returns {dateISO, type} or null
+function extractDateWithType(text) {
   if (!text) return null;
-
-  // 1) explicit "Due ..." with a year/time
+  // 1) explicit "Due ..." (mark as due)
   let m = text.match(/Due(?: on)?\s*([A-Za-z0-9,:\/\-\s]+?\d{4}(?:\s*\d{1,2}:\d{2}\s*(?:AM|PM)?)?)/i);
   if (m) {
     const d = makeSafeDate(m[1].trim());
-    if (d) return d.toString();
+    if (d) return { dateISO: d.toISOString(), type: "due" };
   }
 
-  // 2) range like "Aug 25 - Sep 1, 2025" or "Aug 25 - Sep 1"
+  // 2) "Available until ..." (mark as available-until)
+  m = text.match(/Available until\s*([A-Za-z0-9,:\/\-\s]+?\d{4}(?:\s*\d{1,2}:\d{2}\s*(?:AM|PM)?)?)/i);
+  if (m) {
+    const d = makeSafeDate(m[1].trim());
+    if (d) return { dateISO: d.toISOString(), type: "available-until" };
+  }
+
+  // 3) range like "Aug 25 - Sep 1, 2025" -> prefer end of range, treat as available-until
   m = text.match(/([A-Za-z]{3,9}\s*\d{1,2}(?:[,\s]*\d{4})?)\s*[-–]\s*([A-Za-z]{3,9}\s*\d{1,2}(?:[,\s]*\d{4})?)/i);
   if (m) {
-    // prefer the end date of the range
-    const end = m[2].trim();
-    const d = makeSafeDate(end);
-    if (d) return d.toString();
+    const end = makeSafeDate(m[2].trim());
+    if (end) return { dateISO: end.toISOString(), type: "available-until" };
   }
 
-  // 3) single month/day with optional year (pick the last reasonable date in the text)
+  // 4) fallback: pick the last month/day mention
   const singleMatches = Array.from(text.matchAll(/\b([A-Za-z]{3,9}\s*\d{1,2}(?:[,\s]*\d{4})?)\b/ig)).map(x=>x[1]);
   if (singleMatches.length) {
     const candidate = singleMatches[singleMatches.length-1];
     const d = makeSafeDate(candidate);
-    if (d) return d.toString();
+    if (d) return { dateISO: d.toISOString(), type: "available-until" };
   }
 
-  // 4) ISO date
+  // 5) ISO date
   m = text.match(/\d{4}-\d{2}-\d{2}/);
   if (m) {
     const d = new Date(m[0]);
-    if (!isNaN(d)) return d.toString();
+    if (!isNaN(d)) return { dateISO: d.toISOString(), type: "available-until" };
   }
 
   return null;
 }
 
-// scan node's own text and children for a date-looking substring
 function findDateInNode(node) {
   if (!node) return null;
-  // prefer any text that contains "Due"
   const txt = node.innerText || "";
-  let dt = extractDate(txt);
-  if (dt) {
-    debugLog("matched date in node text", dt);
-    return dt;
-  }
+  let res = extractDateWithType(txt);
+  if (res) { debugLog("matched date in node text", res); return res; }
 
-  // search likely child elements for short date text (time, small, span, div)
   const smallCandidates = node.querySelectorAll ? node.querySelectorAll("time, span, small, div, p") : [];
   for (const el of smallCandidates) {
     const t = (el.innerText || "").trim();
     if (!t) continue;
-    const d = extractDate(t);
-    if (d) {
-      debugLog("matched date in child element", d, "text:", t);
-      return d;
-    }
+    const r = extractDateWithType(t);
+    if (r) { debugLog("matched date in child element", r, "text:", t); return r; }
   }
   return null;
 }
 
-// lightweight candidate collector (keeps existing shadow/iframe recursion if needed)
 function collectCandidates(root = document) {
   const selectors = [
     "tr", "li",
@@ -112,19 +106,52 @@ function collectCandidates(root = document) {
   let list = [];
   try { list = Array.from(root.querySelectorAll(selectors.join(","))); } catch (e) { list = []; }
 
-  // shadow roots
   if (root instanceof Element || root instanceof Document) {
     const hosts = Array.from((root instanceof Document ? root.documentElement : root).querySelectorAll("*"));
     for (const host of hosts) if (host.shadowRoot) list.push(...collectCandidates(host.shadowRoot));
   }
 
-  // same-origin iframes
   const frames = (root instanceof Document ? root : document).querySelectorAll ? Array.from((root instanceof Document ? root : document).querySelectorAll("iframe")) : [];
   for (const f of frames) {
     try { if (f.contentDocument) list.push(...collectCandidates(f.contentDocument)); } catch (e) { debugLog("iframe cross-origin, skipping", f.src); }
   }
 
   return list;
+}
+
+function extractTitleFromNode(node) {
+  if (!node) return "";
+  // 1) Prefer anchors/headings inside node
+  try {
+    const primary = node.querySelector && node.querySelector("a, h1, h2, h3, h4, strong");
+    if (primary && primary.innerText && primary.innerText.trim().length > 2) return primary.innerText.trim();
+
+    // 2) Walk upward a few levels to find a better title anchor/heading
+    let p = node;
+    let depth = 0;
+    while (p && p !== document.body && depth < 8) {
+      // look for a link with a meaningful text
+      const link = p.querySelector && Array.from(p.querySelectorAll("a")).find(a => a.innerText && a.innerText.trim().length > 2);
+      if (link) return link.innerText.trim();
+
+      // look for headings
+      const heading = p.querySelector && p.querySelector("h1,h2,h3,h4,strong");
+      if (heading && heading.innerText && heading.innerText.trim().length > 2) return heading.innerText.trim();
+
+      // fallback: check direct text of the ancestor (avoid short list markers like "1.")
+      const txt = (p.innerText || "").split("\n").map(s => s.trim()).find(Boolean);
+      if (txt && txt.length > 3 && !/^\d+[\.\)]?$/.test(txt)) return txt;
+
+      p = p.parentElement;
+      depth++;
+    }
+
+    // 3) final fallback: use node text but prefer lines that look like titles (contain letters and >3 chars)
+    const candidate = (node.innerText || "").split("\n").map(s => s.trim()).find(s => s.length > 3 && /[A-Za-z]/.test(s));
+    return candidate || "";
+  } catch (e) {
+    return (node.innerText || "").split("\n").map(s => s.trim()).find(s => s.length > 3 && /[A-Za-z]/.test(s)) || "";
+  }
 }
 
 function scrapeDueDates() {
@@ -138,39 +165,47 @@ function scrapeDueDates() {
   candidates.forEach(node => {
     const txt = node.innerText || "";
     if (!txt) return;
-    // quick filter: must include 'Due' or month names
-    if (!/Due\b/i.test(txt) && !/(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\b/i.test(txt)) return;
+    if (!/Due\b/i.test(txt) && !/Available until\b/i.test(txt) && !/(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\b/i.test(txt)) return;
 
-    // find a title (existing logic)
-    let title = "";
-    try {
-      const a = node.querySelector("a, h1, h2, h3, h4, strong");
-      if (a && a.innerText.trim()) title = a.innerText.trim();
-      else {
-        let p = node;
-        while (p && p !== document.body) {
-          const link = p.querySelector("a, h1, h2, h3, h4, strong");
-          if (link && link.innerText.trim()) { title = link.innerText.trim(); break; }
-          p = p.parentElement;
-        }
-      }
-      if (!title) title = (node.innerText || "").split("\n").map(s=>s.trim()).find(Boolean) || "";
-    } catch (e) { title = (node.innerText || "").split("\n").map(s=>s.trim()).find(Boolean) || ""; }
+    // improved title extraction
+    const title = extractTitleFromNode(node);
+    const dateObj = findDateInNode(node);
+    if (!title || !dateObj) return;
 
-    const date = findDateInNode(node);
-    if (!title || !date) return;
-
-    const key = `${title}||${date}`;
+    const key = `${title}||${dateObj.dateISO}||${dateObj.type}`;
     if (seen.has(key)) return;
     seen.add(key);
-    dueItems.push({ title, date });
+    dueItems.push({ title: title, date: dateObj.dateISO, type: dateObj.type });
   });
 
   debugLog("found dueItems", dueItems);
   if (dueItems.length > 0) {
     chrome.storage.sync.get("dueDates", (data) => {
-      const existing = data.dueDates || [];
-      dueItems.forEach(item => { if (!existing.some(e=>e.title===item.title && e.date===item.date)) existing.push(item); });
+      let existing = data.dueDates || [];
+
+      dueItems.forEach(item => {
+        // if same title and same date+type exists, skip
+        if (existing.some(e => e.title === item.title && e.date === item.date && e.type === item.type)) return;
+
+        // prefer 'due' over existing 'available-until' for the same title:
+        if (item.type === "due") {
+          // remove any available-until entries for this title (even if different date)
+          existing = existing.filter(e => !(e.title === item.title && e.type === "available-until"));
+          existing.push(item);
+          return;
+        }
+
+        // if adding available-until, don't overwrite an existing 'due' for same title
+        if (item.type === "available-until") {
+          if (existing.some(e => e.title === item.title && e.type === "due")) return;
+          existing.push(item);
+          return;
+        }
+
+        // default push for unknown type
+        existing.push(item);
+      });
+
       chrome.storage.sync.set({ dueDates: existing }, () => debugLog("Saved dueDates:", existing));
     });
   }
