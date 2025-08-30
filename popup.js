@@ -1,6 +1,7 @@
 const dueList = document.getElementById("due-list");
 const addBtn = document.getElementById("add");
 
+
 function normalizeText(s) {
   if (!s) return "";
   return s.replace(/â€"/g, "—").replace(/\uFFFD/g, "—").normalize("NFC").trim();
